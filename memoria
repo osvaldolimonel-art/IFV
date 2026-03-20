@@ -1,0 +1,117 @@
+import streamlit as st
+import math
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Image
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+import io
+
+# ---------------- CONFIGURACIÓN DE PÁGINA ----------------
+st.set_page_config(page_title="STROM - Ingeniería FV", layout="wide", page_icon="⚡")
+
+# CSS personalizado para imitar la interfaz de la imagen
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stButton>button { width: 100%; border-radius: 5px; background-color: #00b050; color: white; height: 3em; }
+    .stTextInput>div>div>input { border-radius: 5px; }
+    .card {
+        background-color: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
+    }
+    h1, h2, h3 { color: #1e293b; }
+    .sidebar .sidebar-content { background-color: #ffffff; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# ---------------- LÓGICA CORE (Igual a la anterior) ----------------
+def calc_voc_corregido(Voc, betaVoc_pct, Tmin, Tref):
+    return Voc * (1 + (betaVoc_pct/100.0)*(Tref - Tmin))
+
+def sugerir_paneles_string(Vmax_inv, Voc_corr):
+    return int(Vmax_inv // Voc_corr) if Voc_corr > 0 else 0
+
+def seleccionar_calibre(I):
+    AMPACIDADES = {"14 AWG": 20, "12 AWG": 25, "10 AWG": 35, "8 AWG": 50, "6 AWG": 65, "4 AWG": 85, "2 AWG": 115, "1/0 AWG": 150}
+    for calibre, amp in AMPACIDADES.items():
+        if I <= amp: return calibre
+    return "Mayor a 1/0"
+
+# ---------------- INTERFAZ (Estilo Dashboard) ----------------
+
+# --- SIDEBAR (Panel de Cliente) ---
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/3239/3239127.png", width=100) # Reemplazar con tu logo real
+    st.title("STROM")
+    st.subheader("Gestor de Proyectos")
+    
+    with st.expander("👤 DATOS DEL CLIENTE", expanded=True):
+        cliente = st.text_input("Nombre del cliente")
+        proyecto = st.text_input("Nombre del proyecto")
+        ubicacion = st.text_input("Ubicación")
+        responsable = st.text_input("Responsable Técnico")
+        cedula = st.text_input("Cédula profesional")
+
+# --- CUERPO PRINCIPAL ---
+col1, col2 = st.columns([1, 1.2])
+
+with col1:
+    st.markdown('<div class="card"><h3>⚙️ Parámetros de Diseño</h3>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        Voc = st.number_input("Voc (V)", value=41.5)
+        Isc = st.number_input("Isc (A)", value=13.5)
+        betaVoc = st.number_input("Beta Voc (%)", value=-0.29)
+    with c2:
+        Vmp = st.number_input("Vmp (V)", value=34.0)
+        Imp = st.number_input("Imp (A)", value=12.5)
+        Tmin = st.number_input("Temp Mín (°C)", value=10)
+    
+    Vmax_inv = st.number_input("Voltaje Máx Inversor (V)", value=1000)
+    V_ac = st.selectbox("Voltaje Sistema AC", [220, 440, 480], index=2)
+    fases = st.radio("Fases", ["Monofásico", "Trifásico"], horizontal=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with col2:
+    st.markdown('<div class="card"><h3>📊 Configuración de Strings</h3>', unsafe_allow_html=True)
+    Voc_corr = calc_voc_corregido(Voc, betaVoc, Tmin, 25)
+    sugerido = sugerir_paneles_string(Vmax_inv, Voc_corr)
+    
+    st.info(f"💡 Sugerencia Técnica: Máximo **{sugerido}** paneles por serie.")
+    
+    n_mppt = st.number_input("Cantidad de MPPTs", min_value=1, value=2)
+    total_paneles = 0
+    
+    for i in range(int(n_mppt)):
+        cols_mppt = st.columns(2)
+        with cols_mppt[0]:
+            entradas = st.number_input(f"Entradas MPPT {i+1}", min_value=1, key=f"e_{i}")
+        with cols_mppt[1]:
+            p_por_serie = st.number_input(f"Paneles/Serie M{i+1}", value=sugerido, key=f"p_{i}")
+        total_paneles += (entradas * p_por_serie)
+    
+    st.metric("Total de Paneles", f"{total_paneles} módulos")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- BOTÓN DE CÁLCULO Y RESULTADOS ---
+if st.button("🚀 GENERAR CÁLCULOS Y MEMORIA TÉCNICA"):
+    # Cálculos
+    P_total = (Vmp * Imp * total_paneles) / 1000.0
+    I_dc = Isc * 1.56
+    I_ac = (P_total * 1000) / (math.sqrt(3) * V_ac) if fases == "Trifásico" else (P_total * 1000) / V_ac
+    
+    # Mostrar resultados en tarjetas
+    res1, res2, res3 = st.columns(3)
+    res1.metric("Potencia DC", f"{P_total:.2f} kWp")
+    res2.metric("Calibre DC", seleccionar_calibre(I_dc))
+    res3.metric("Calibre AC", seleccionar_calibre(I_ac))
+
+    st.success("✅ Cálculos finalizados con éxito según NOM-001-SEDE.")
+    
+    # Aquí iría la lógica del PDF (usando io.BytesIO para que funcione en la web)
+    st.download_button(label="📥 Descargar Memoria Técnica (PDF)", 
+                       data="Aquí va el binario del PDF", 
+                       file_name=f"Memoria_{cliente}.pdf", 
+                       mime="application/pdf")
